@@ -121,16 +121,34 @@ explicit opt-in for envs created before coverage starts. Resolve during the spik
 6. Exclusion pragmas (a `{# pragma: no cover #}` equivalent), `excluded_lines()`. **DONE** (line and
    whole-block, honoring custom `exclude_lines`/`exclude_also`).
 7. Docs + first release. Docs **DONE**; release pending.
+8. Real-project hardening. **DONE.** A multi-agent verification pass against standalone, async,
+   bytecode-cached, and `pytest-cov` multi-file-inheritance projects surfaced two blockers, both now
+   fixed and regression-tested:
+   - **Extension tags aborted the whole report.** The analysis env that reparses each template for
+     its line set was a bare `Environment()`, so any `{% do %}`/`{% trans %}`/`{% break %}`/custom
+     tag raised `TemplateSyntaxError`; coverage re-raised it from `get_analysis_to_report`, killing
+     the entire report (Python included). The analysis env now always loads the standard
+     tag-registering extensions, custom ones are declared via `[jinja_coverage] extensions`, and an
+     unanalyzable template degrades gracefully (warn once, report 0 lines) instead of crashing.
+   - **Bytecode cache warmed without coverage was silently reused.** Jinja keys its cache on
+     name + source, not the code generator, so an uninstrumented cache entry (no record calls) was
+     reused by the coverage run and measured nothing. The instrumented `get_cache_key` now salts the
+     key, giving instrumented bytecode its own cache entry that coexists with the app's.
 
 ## Open questions / risks
 
-- Does codegen-time instrumentation actually handle the PR #674 hard cases (multi-line data, end
-  tags, extension tags, constant folding) that the back-mapping approach could not? This is the
-  whole bet, validate early in Spike A.
-- Performance overhead of a record call per construct at render time. Measure; consider compiling
-  it out when coverage is not active.
+- ~~Does codegen-time instrumentation actually handle the PR #674 hard cases (multi-line data, end
+  tags, extension tags, constant folding)?~~ **Validated.** Multi-line data, end tags, and standard
+  + declared extension tags are all measured; undeclared custom tags degrade gracefully rather than
+  crashing. This was the whole bet and it holds.
+- Performance overhead of a record call per construct at render time (measured at roughly an order of
+  magnitude on a heavily looped template). Still **open**: consider compiling the record calls out, or
+  batching them, when the hot path matters. Only affects runs with coverage active.
+- **Known-unmeasured environments**, documented in the README compatibility matrix rather than fixed:
+  - `jinja2.nativetypes.NativeEnvironment` pins its own `NativeCodeGenerator`, so the instrumented
+    generator is never installed on it.
+  - Templates with no file path (`DictLoader`, `Environment.from_string`) have nowhere to be reported.
 - Reliably hooking environments created before `coverage_init` runs (ordering).
-- Line vs branch: ship line first, branch later. Confirm with user.
 - Is there real demand for coverage.py-integrated Jinja2 coverage beyond jinjatest's standalone
   pytest reporting? (Impact question from the idea file.)
 

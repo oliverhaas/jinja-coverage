@@ -78,6 +78,29 @@ Branch measurement is line-based, so a few constructs are out of scope:
 These are the same limitations coverage.py itself has for one-liners; everything else (nested
 conditionals, loops, branches inside macros, includes, and inheritance blocks) is measured.
 
+### Custom extensions
+
+Templates are reparsed at report time to work out which lines *could* run. That analysis happens in
+a throwaway environment that already knows the standard tag-registering extensions (`{% do %}`,
+`{% break %}`/`{% continue %}`, `{% trans %}`, `{% debug %}`), so templates using them are measured
+out of the box. If your application registers a *custom* extension that adds its own tags, declare it
+so the analyzer can parse those tags too:
+
+```ini
+[run]
+plugins = jinja_coverage
+
+[jinja_coverage]
+extensions = myapp.templating.MarkdownExtension, myapp.templating.IconExtension
+```
+
+The value is a comma- or whitespace-separated list of dotted import paths to `jinja2.ext.Extension`
+subclasses. An entry that can't be imported is skipped with a warning rather than failing the run.
+
+If a template still can't be parsed (an undeclared custom tag, a syntax the analyzer doesn't
+understand), it degrades gracefully: a one-time warning is emitted and that template is reported as
+having no measurable lines, so a single odd template never aborts the rest of the report.
+
 ### Excluding code
 
 The standard coverage.py exclusion mechanism works in templates via a Jinja comment. Put coverage's
@@ -109,6 +132,41 @@ untaken `{% if %}` arm or an unskipped `{% for %}` surface as a partial branch.
 No extra configuration is needed for Django's `django.template.backends.jinja2.Jinja2` backend. The
 instrumentation is installed on `jinja2.Environment` itself, so the environment Django builds picks it
 up automatically once the plugin is enabled.
+
+### Bytecode caches
+
+Jinja keys its bytecode cache on the template name and source, not on the code generator, so an
+instrumented and an uninstrumented compile of the same template would otherwise collide on one cache
+entry. The plugin salts the cache key while it is active. A cache your application warmed *without*
+coverage is therefore never silently reused (which would measure nothing); instrumented bytecode gets
+its own cache entry that coexists with, and never clobbers, your production cache. No configuration is
+needed, and `FileSystemBytecodeCache` works as usual.
+
+## Compatibility
+
+Measured correctly:
+
+| Works | Notes |
+| --- | --- |
+| Standalone Jinja2 and Django's Jinja2 backend | instrumentation is on `jinja2.Environment` itself |
+| Line and branch coverage | see the branch-coverage limitations above |
+| Inheritance, `{% include %}`, `{% import %}`, macros | branches nested inside all of these are measured |
+| Async rendering (`render_async`) | |
+| Parallel mode (`coverage combine`) and `pytest-cov` | template hits combine with Python hits |
+| Standard extension tags (`do`, `loopcontrols`, `i18n`, `debug`) | loaded into the analyzer by default |
+| Custom extensions declared via `[jinja_coverage] extensions` | see [Custom extensions](#custom-extensions) |
+| `FileSystemBytecodeCache` | the cache key is salted while instrumented |
+
+Not measured (templates render correctly, they just don't appear in the report):
+
+| Not measured | Why |
+| --- | --- |
+| `jinja2.nativetypes.NativeEnvironment` | it pins its own `NativeCodeGenerator`, so the instrumented generator isn't installed |
+| Templates from a string source with no file path (e.g. `DictLoader`, `Environment.from_string`) | coverage reports against files on disk; a template with no path has nowhere to be reported |
+
+Note on performance: instrumentation injects a recording call in front of every construct, so a
+heavily looped template renders meaningfully slower while coverage is active. This only affects runs
+with the plugin enabled (typically your test suite), not production.
 
 ## License
 
