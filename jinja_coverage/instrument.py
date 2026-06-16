@@ -239,6 +239,24 @@ def _linenos_from_generated(generated_source: str) -> set[int]:
     return linenos
 
 
+def _ast_int(node: ast.expr) -> int | None:
+    """The int value of an AST literal, handling negatives (e.g. the ``-1`` exit).
+
+    A negative literal parses as ``UnaryOp(USub, Constant)``, not ``Constant``,
+    so the exit sentinel (``-1``) needs unwrapping to be recovered.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, int):
+        return node.value
+    if (
+        isinstance(node, ast.UnaryOp)
+        and isinstance(node.op, ast.USub)
+        and isinstance(node.operand, ast.Constant)
+        and isinstance(node.operand.value, int)
+    ):
+        return -node.operand.value
+    return None
+
+
 def _arcs_from_generated(generated_source: str) -> set[tuple[int, int]]:
     """Extract every ``(prev, next)`` pair passed to ``__cov_arc__`` in codegen."""
     arcs: set[tuple[int, int]] = set()
@@ -250,14 +268,9 @@ def _arcs_from_generated(generated_source: str) -> set[tuple[int, int]]:
         arg = call.args[1]
         if not (isinstance(arg, ast.Tuple) and len(arg.elts) == _RECORD_ARG_COUNT):
             continue  # pragma: no cover - the generator only ever emits 2-tuples
-        prev, following = arg.elts
-        if (
-            isinstance(prev, ast.Constant)
-            and isinstance(following, ast.Constant)
-            and isinstance(prev.value, int)
-            and isinstance(following.value, int)
-        ):
-            arcs.add((prev.value, following.value))
+        prev, following = (_ast_int(elt) for elt in arg.elts)
+        if prev is not None and following is not None:
+            arcs.add((prev, following))
     return arcs
 
 

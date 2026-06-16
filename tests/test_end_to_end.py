@@ -294,6 +294,34 @@ def test_branch_mode_full_coverage_when_both_arms_run(tmp_path):
     assert page["summary"]["percent_covered"] == 100.0
 
 
+# 1 <p>start</p> / 2 {% if show %} / 3 <p>detail</p> / 4 {% endif %}. Nothing
+# follows the if, so its false path exits the template (a negative arc target).
+_EXIT_BRANCH_TEMPLATE = "<p>start</p>\n{% if show %}\n<p>detail</p>\n{% endif %}"
+
+
+@pytest.mark.integration
+def test_branch_mode_reports_an_if_that_never_exits_its_block(tmp_path):
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "templates" / "page.html").write_text(_EXIT_BRANCH_TEMPLATE)
+    (tmp_path / "run.py").write_text(
+        "from jinja2 import Environment, FileSystemLoader\n"
+        'env = Environment(loader=FileSystemLoader("templates"))\n'
+        'env.get_template("page.html").render(show=True)\n',  # always true -> never exits via the false path
+    )
+    (tmp_path / ".coveragerc").write_text("[run]\nplugins = jinja_coverage\nbranch = true\n")
+
+    _coverage("run", "run.py", cwd=tmp_path)
+    page = _file(_report(tmp_path), "page.html")
+
+    assert page["executed_lines"] == [1, 2, 3]
+    assert page["missing_lines"] == []
+    # The if only ever took the true path; skipping it to the template exit
+    # (coverage's negative "exit" target) is the missing branch.
+    assert page["missing_branches"] == [[2, -1]]
+    assert page["summary"]["num_branches"] == 2
+    assert page["summary"]["num_partial_branches"] == 1
+
+
 # 1 {% for i in items %} / 2 <li> / 3 {% endfor %} / 4 done. Rendered only with a
 # non-empty list, so the zero-iteration (skip) path 1 -> 4 is never taken.
 _FOR_BRANCH_TEMPLATE = "{% for i in items %}\n<li>{{ i }}</li>\n{% endfor %}\n<p>done</p>\n"

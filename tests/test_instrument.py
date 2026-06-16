@@ -1,5 +1,6 @@
 """Tests for codegen-time template instrumentation."""
 
+import ast
 import os
 import traceback
 
@@ -143,6 +144,24 @@ def test_branch_arcs_of_an_empty_if_body_collapse_onto_the_successor():
     # the successor and coincides with the skip arc: no real branch survives.
     src = "{% if a %}{% endif %}\nY\n"
     assert instrument.branch_arcs(src, filename="/p.html") == {(1, 2)}
+
+
+@pytest.mark.unit
+def test_ast_int_reads_positive_and_negative_literals_and_rejects_others():
+    # The exit sentinel -1 parses as UnaryOp(USub, Constant), not Constant.
+    assert instrument._ast_int(ast.parse("7", mode="eval").body) == 7
+    assert instrument._ast_int(ast.parse("-1", mode="eval").body) == -1
+    assert instrument._ast_int(ast.parse("'x'", mode="eval").body) is None
+
+
+@pytest.mark.unit
+def test_branch_arcs_of_an_if_at_the_block_end_skip_to_exit():
+    # 1 X / 2 {% if a %} / 3 Y / 4 {% endif %}. Nothing follows the if, so its
+    # false path exits the template: coverage marks an exit with a negative line.
+    src = "X\n{% if a %}\nY\n{% endif %}"
+    arcs = instrument.branch_arcs(src, filename="/p.html")
+    assert (2, 3) in arcs  # condition true -> body
+    assert (2, -1) in arcs  # condition false -> exit the template
 
 
 @pytest.mark.unit
