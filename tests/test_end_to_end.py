@@ -180,6 +180,35 @@ def test_html_report_highlights_a_missing_template_line(measured_project):
     assert "mis" in detail  # ...is highlighted as missing
 
 
+# -- custom filters: report generation must not crash -------------------------
+
+_FILTER_TEMPLATE = "<h1>{{ title | shout }}</h1>\n{% if subtitle %}\n<h2>{{ subtitle | shout }}</h2>\n{% endif %}\n"
+
+_FILTER_RUNNER = """\
+from jinja2 import Environment, FileSystemLoader
+
+env = Environment(loader=FileSystemLoader("templates"))
+env.filters["shout"] = lambda s: str(s).upper() + "!"
+print(env.get_template("page.html").render(title="hi", subtitle=None))
+"""
+
+
+@pytest.mark.integration
+def test_report_does_not_crash_on_templates_using_custom_filters(tmp_path):
+    # Regression: the reporter recompiles the template to find executable lines.
+    # A bare analysis env lacks the app's custom filters, which used to crash
+    # `coverage report`/`json` with "No filter named ...".
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "templates" / "page.html").write_text(_FILTER_TEMPLATE)
+    (tmp_path / "run.py").write_text(_FILTER_RUNNER)
+    (tmp_path / ".coveragerc").write_text("[run]\nplugins = jinja_coverage\n")
+
+    _coverage("run", "run.py", cwd=tmp_path)
+    page = _file(_report(tmp_path), "page.html")  # _report would raise if json crashed
+    assert 1 in page["executed_lines"]  # <h1> with the custom filter, rendered
+    assert 3 in page["missing_lines"]  # <h2> branch not taken (subtitle is None)
+
+
 # -- Django Jinja2 backend, measured through the real coverage CLI ------------
 
 _DJANGO_TEMPLATE = "<p>{% if x %}yes{% else %}\nno\n{% endif %}</p>\n"

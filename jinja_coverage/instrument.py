@@ -42,6 +42,9 @@ def _output_linenos(node: nodes.Output) -> set[int]:
     """
     linenos: set[int] = set()
     for child in node.nodes:
+        if child.lineno is None:
+            # Extension-synthesized nodes may omit a lineno; nothing to record.
+            continue
         if isinstance(child, nodes.TemplateData):
             for offset, segment in enumerate(child.data.split("\n")):
                 if segment.strip():
@@ -102,10 +105,30 @@ def _linenos_from_generated(generated_source: str) -> set[int]:
     return linenos
 
 
+def _analysis_stub(*_args: object, **_kwargs: object) -> str:
+    """A no-op filter/test, registered so analysis-time codegen can't fail."""
+    return ""
+
+
+def _register_referenced_callables(env: Environment, parsed: nodes.Template) -> None:
+    """Stub any filters/tests ``parsed`` references but the analysis env lacks.
+
+    We only compile ``source`` to recover its instrumentable line set, using a
+    bare env that has none of the app's custom filters/tests. Jinja's codegen
+    aborts on an unknown filter/test name, so register no-op stubs first; they
+    don't change which lines carry a record, only whether compilation succeeds.
+    """
+    for node in parsed.find_all(nodes.Filter):
+        env.filters.setdefault(node.name, _analysis_stub)
+    for node in parsed.find_all(nodes.Test):
+        env.tests.setdefault(node.name, _analysis_stub)
+
+
 def executable_lines(source: str, *, filename: str, name: str | None = None) -> set[int]:
     """All instrumentable template line numbers in ``source`` (executed or not)."""
     env = Environment()  # noqa: S701 - not rendering, only compiling for analysis
     env.code_generator_class = InstrumentedCodeGenerator
+    _register_referenced_callables(env, env.parse(source, name=name, filename=filename))
     generated = env.compile(source, name=name, filename=filename, raw=True)
     return _linenos_from_generated(generated)
 

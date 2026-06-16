@@ -4,7 +4,7 @@ import os
 import traceback
 
 import pytest
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, nodes
 from jinja2.compiler import CodeGenerator
 
 from jinja_coverage import collector, instrument
@@ -74,6 +74,32 @@ def test_executable_lines_marks_for_body_but_not_endfor():
     assert 1 in lines  # {% for %}
     assert 2 in lines  # body
     assert 3 not in lines  # {% endfor %}
+
+
+@pytest.mark.unit
+def test_executable_lines_handles_unknown_filters_and_tests():
+    # The analysis env doesn't have the app's custom filters/tests, but it must
+    # still compute the line set instead of crashing with "No filter named ...".
+    src = "<h1>{{ title | shout }}</h1>\n{% if x is weird %}\n{{ a }}\n{% endif %}\n"
+    lines = instrument.executable_lines(src, filename="/p.html")
+    assert {1, 2, 3} <= lines
+
+
+@pytest.mark.unit
+def test_analysis_stub_is_a_harmless_noop():
+    # Registered for unknown filters/tests during analysis; never invoked at
+    # render time, but must stay a harmless no-op if it ever were.
+    assert instrument._analysis_stub(1, 2, key="v") == ""
+
+
+@pytest.mark.unit
+def test_output_linenos_skips_children_without_a_lineno():
+    # Extension-synthesized Output children can carry lineno=None; computing the
+    # line set (or instrumenting) must not crash on them.
+    data = nodes.TemplateData("hi")  # no set_lineno -> lineno is None
+    output = nodes.Output([data])
+    output.lineno = 2
+    assert instrument._output_linenos(output) == set()
 
 
 # -- render-time recording ----------------------------------------------------
