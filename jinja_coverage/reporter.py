@@ -9,7 +9,7 @@ universe reported here.
 import re
 
 from coverage.plugin import FileReporter
-from coverage.types import TLineNo
+from coverage.types import TArc, TLineNo
 
 from jinja_coverage import instrument
 
@@ -30,6 +30,29 @@ class JinjaFileReporter(FileReporter):
         # the executed set to find "missing"; excluded_lines() is informational.
         # So exclusions must be removed here, like coverage's own Python reporter.
         return self._executable_lines() - self.excluded_lines()
+
+    def arcs(self) -> set[TArc]:
+        """Possible branch arcs: ``(if-line, branch-entry)`` pairs.
+
+        Drawn from the same instrumentation that records arcs at render time, so
+        an executed arc can never fall outside this set. Arcs touching an
+        excluded line are dropped, mirroring how exclusion removes lines, so an
+        excluded ``{% if %}`` block adds nothing to the branch total.
+        """
+        possible = instrument.branch_arcs(self.source(), filename=self.filename)
+        excluded = self.excluded_lines()
+        return {(src, dst) for src, dst in possible if src not in excluded and dst not in excluded}
+
+    def exit_counts(self) -> dict[TLineNo, int]:
+        """Map each branch source line to its number of distinct destinations.
+
+        coverage.py treats a line with more than one exit as a branch line, so
+        every ``{% if %}`` line gets one exit per arm.
+        """
+        destinations: dict[TLineNo, set[TLineNo]] = {}
+        for src, dst in self.arcs():
+            destinations.setdefault(src, set()).add(dst)
+        return {src: len(dsts) for src, dsts in destinations.items()}
 
     def excluded_lines(self) -> set[TLineNo]:
         """Template lines a coverage exclusion pragma removes from measurement.

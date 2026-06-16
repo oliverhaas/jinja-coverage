@@ -102,6 +102,55 @@ def test_output_linenos_skips_children_without_a_lineno():
     assert instrument._output_linenos(output) == set()
 
 
+# -- branch arc extraction ----------------------------------------------------
+
+
+@pytest.mark.unit
+def test_branch_arcs_of_a_one_armed_if_includes_taken_and_skip_arcs():
+    # 1 {% if a %} / 2 X / 3 {% endif %} / 4 Y
+    src = "{% if a %}\nX\n{% endif %}\nY\n"
+    arcs = instrument.branch_arcs(src, filename="/p.html")
+    assert (1, 2) in arcs  # condition true -> body
+    assert (1, 4) in arcs  # condition false -> skip to the line after the block
+
+
+@pytest.mark.unit
+def test_branch_arcs_of_if_else_target_both_branch_bodies():
+    # 1 {% if a %} / 2 X / 3 {% else %} / 4 Y / 5 {% endif %}
+    src = "{% if a %}\nX\n{% else %}\nY\n{% endif %}\n"
+    assert instrument.branch_arcs(src, filename="/p.html") == {(1, 2), (1, 4)}
+
+
+@pytest.mark.unit
+def test_branch_arcs_of_an_elif_chain_source_every_arm_from_the_if_line():
+    # 1 if / 2 X / 3 elif / 4 Y / 5 else / 6 Z / 7 endif
+    src = "{% if a %}\nX\n{% elif b %}\nY\n{% else %}\nZ\n{% endif %}\n"
+    assert instrument.branch_arcs(src, filename="/p.html") == {(1, 2), (1, 4), (1, 6)}
+
+
+@pytest.mark.unit
+def test_branch_arcs_of_a_nested_if_skip_to_the_correct_successor():
+    # 1 if a / 2 if b / 3 X / 4 endif / 5 Y / 6 endif / 7 Z
+    src = "{% if a %}\n{% if b %}\nX\n{% endif %}\nY\n{% endif %}\nZ\n"
+    arcs = instrument.branch_arcs(src, filename="/p.html")
+    assert (1, 7) in arcs  # outer if skips past the whole block to line 7
+    assert {(2, 3), (2, 5)} <= arcs  # inner if skips to its sibling, line 5
+
+
+@pytest.mark.unit
+def test_branch_arcs_of_an_empty_if_body_collapse_onto_the_successor():
+    # `{% if a %}{% endif %}` has no body line, so the taken arc falls back to
+    # the successor and coincides with the skip arc: no real branch survives.
+    src = "{% if a %}{% endif %}\nY\n"
+    assert instrument.branch_arcs(src, filename="/p.html") == {(1, 2)}
+
+
+@pytest.mark.unit
+def test_branch_arcs_empty_without_a_filename():
+    # from_string templates (filename=None) are not measured, so emit no arcs.
+    assert instrument.branch_arcs("{% if a %}\nX\n{% endif %}\n", filename="") == set()
+
+
 # -- render-time recording ----------------------------------------------------
 
 
@@ -117,6 +166,21 @@ def test_render_records_only_the_executed_branch(tmp_path):
     executed = collector.collected()[os.path.realpath(str(tmpl))]
     assert 2 in executed  # taken branch
     assert 4 not in executed  # un-taken else branch
+
+
+@pytest.mark.unit
+def test_render_records_only_the_taken_branch_arc(tmp_path):
+    tmpl = tmp_path / "p.html"
+    # 1 {% if x %} / 2 yes / 3 {% else %} / 4 no / 5 {% endif %}
+    tmpl.write_text("{% if x %}\nyes\n{% else %}\nno\n{% endif %}\n")
+    instrument.install()
+
+    env = Environment(loader=FileSystemLoader(str(tmp_path)))
+    env.get_template("p.html").render(x=True)
+
+    arcs = collector.collected_arcs()[os.path.realpath(str(tmpl))]
+    assert (1, 2) in arcs  # took the true branch
+    assert (1, 4) not in arcs  # never took the else branch
 
 
 @pytest.mark.unit

@@ -128,6 +128,40 @@ def test_save_flushes_collected_template_lines_into_the_data(tmp_path):
 
 
 @pytest.mark.unit
+def test_save_flushes_collected_arcs_in_branch_mode(tmp_path):
+    template = tmp_path / "t.html"
+    template.write_text("{% if x %}\na\n{% endif %}\nb\n")
+    jinja_coverage.coverage_init(_StubRegistry(), {})
+    collector.record(str(template), [1, 2])
+    collector.record_arc(str(template), (1, 2))
+
+    cov = coverage.Coverage(branch=True, data_file=str(tmp_path / ".coverage"))
+    cov.save()
+
+    data = cov.get_data()
+    assert data.has_arcs()
+    assert (1, 2) in data.arcs(os.path.realpath(str(template)))
+
+
+@pytest.mark.unit
+def test_save_omits_arcs_when_not_in_branch_mode(tmp_path):
+    # add_arcs would flip the data to has_arcs=True, which must not happen for a
+    # line-only run (it would make coverage expect arcs from Python files too).
+    template = tmp_path / "t.html"
+    template.write_text("{% if x %}\na\n{% endif %}\nb\n")
+    jinja_coverage.coverage_init(_StubRegistry(), {})
+    collector.record(str(template), [1, 2])
+    collector.record_arc(str(template), (1, 2))
+
+    cov = coverage.Coverage(data_file=str(tmp_path / ".coverage"))  # branch off
+    cov.save()
+
+    data = cov.get_data()
+    assert data.lines(os.path.realpath(str(template))) == [1, 2]
+    assert not data.has_arcs()
+
+
+@pytest.mark.unit
 def test_save_without_a_registered_plugin_is_a_noop(tmp_path):
     # The save patch persists process-wide; if it ever runs without our plugin
     # registered (e.g. a plain pytest-cov save), it must do nothing.

@@ -55,6 +55,35 @@ def test_excluded_lines_expands_a_pragma_on_a_block_header_to_the_block(tmp_path
     assert 4 not in excluded  # content after the block is unaffected
 
 
+# -- branch arcs --------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_arcs_returns_branch_arcs_for_a_one_armed_if(tmp_path):
+    tmpl = tmp_path / "p.html"
+    # 1 {% if a %} / 2 X / 3 {% endif %} / 4 Y
+    tmpl.write_text("{% if a %}\nX\n{% endif %}\nY\n")
+    assert JinjaFileReporter(str(tmpl)).arcs() == {(1, 2), (1, 4)}
+
+
+@pytest.mark.unit
+def test_exit_counts_marks_the_if_line_as_a_branch(tmp_path):
+    tmpl = tmp_path / "p.html"
+    tmpl.write_text("{% if a %}\nX\n{% elif b %}\nY\n{% else %}\nZ\n{% endif %}\n")
+    # The if-line has one exit per arm; coverage treats >1 exit as a branch line.
+    assert JinjaFileReporter(str(tmpl)).exit_counts()[1] == 3
+
+
+@pytest.mark.unit
+def test_arcs_drops_arcs_touching_excluded_lines(tmp_path):
+    tmpl = tmp_path / "p.html"
+    # A pragma on the {% if %} header excludes the whole block; its arcs must not
+    # survive to inflate the branch total.
+    tmpl.write_text("{% if debug %}{# pragma: no cover #}\n<pre>{{ d }}</pre>\n{% endif %}\n<p>x</p>\n")
+    reporter = JinjaFileReporter(str(tmpl), exclude_regex=_PRAGMA)
+    assert all(1 not in (src, dst) for src, dst in reporter.arcs())
+
+
 @pytest.mark.unit
 def test_source_returns_file_contents(tmp_path):
     tmpl = tmp_path / "p.html"

@@ -240,6 +240,60 @@ def test_pragma_no_cover_excludes_a_template_block_from_the_report(tmp_path):
     assert page["summary"]["percent_covered"] == 100.0
 
 
+# -- branch coverage ----------------------------------------------------------
+
+# 1 {% if x %} / 2 yes / 3 {% endif %} / 4 done. Rendered only with x=True, so
+# the false (skip) path 1 -> 4 is never taken.
+_BRANCH_TEMPLATE = "{% if x %}\nyes\n{% endif %}\n<p>done</p>\n"
+
+_BRANCH_RUNNER = """\
+from jinja2 import Environment, FileSystemLoader
+
+env = Environment(loader=FileSystemLoader("templates"))
+print(env.get_template("page.html").render(x=True))
+"""
+
+
+@pytest.mark.integration
+def test_branch_mode_reports_an_untaken_if_branch(tmp_path):
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "templates" / "page.html").write_text(_BRANCH_TEMPLATE)
+    (tmp_path / "run.py").write_text(_BRANCH_RUNNER)
+    (tmp_path / ".coveragerc").write_text("[run]\nplugins = jinja_coverage\nbranch = true\n")
+
+    _coverage("run", "run.py", cwd=tmp_path)
+    page = _file(_report(tmp_path), "page.html")
+
+    # Lines are recovered from arc endpoints in branch mode, so the content is
+    # still fully line-covered...
+    assert page["executed_lines"] == [1, 2, 4]
+    assert page["missing_lines"] == []
+    # ...but the one-armed if is a branch whose false path never ran.
+    assert page["missing_branches"] == [[1, 4]]
+    assert page["summary"]["num_branches"] == 2
+    assert page["summary"]["num_partial_branches"] == 1
+
+
+@pytest.mark.integration
+def test_branch_mode_full_coverage_when_both_arms_run(tmp_path):
+    # Same template, rendered with x both True and False: every branch is taken.
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "templates" / "page.html").write_text(_BRANCH_TEMPLATE)
+    (tmp_path / "run.py").write_text(
+        "from jinja2 import Environment, FileSystemLoader\n"
+        'env = Environment(loader=FileSystemLoader("templates"))\n'
+        't = env.get_template("page.html")\n'
+        "t.render(x=True)\n"
+        "t.render(x=False)\n",
+    )
+    (tmp_path / ".coveragerc").write_text("[run]\nplugins = jinja_coverage\nbranch = true\n")
+
+    _coverage("run", "run.py", cwd=tmp_path)
+    page = _file(_report(tmp_path), "page.html")
+    assert page["missing_branches"] == []
+    assert page["summary"]["percent_covered"] == 100.0
+
+
 # -- Django Jinja2 backend, measured through the real coverage CLI ------------
 
 _DJANGO_TEMPLATE = "<p>{% if x %}yes{% else %}\nno\n{% endif %}</p>\n"

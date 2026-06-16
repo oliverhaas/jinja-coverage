@@ -10,7 +10,6 @@ render-time hits collected in :mod:`jinja_coverage.collector` land in the same
 from typing import Protocol
 
 import coverage
-from coverage import CoverageData
 
 from jinja_coverage import collector, instrument
 from jinja_coverage.plugin import JinjaCoveragePlugin
@@ -39,12 +38,13 @@ def coverage_init(reg: _Registry, options: object) -> None:  # noqa: ARG001
     reg.add_configurer(_plugin)
 
 
-def _flush(data: CoverageData) -> None:
-    """Write collected template hits into ``data``, if our plugin is active."""
+def _flush(cov: coverage.Coverage) -> None:
+    """Write collected template hits into ``cov``'s data, if our plugin is active."""
     plugin_name = getattr(_plugin, "_coverage_plugin_name", None)
     if plugin_name is None:
         return
-    collector.flush_into(data, plugin_name=plugin_name)
+    branch = bool(cov.get_option("run:branch"))
+    collector.flush_into(cov.get_data(), plugin_name=plugin_name, branch=branch)
 
 
 def _patch_save() -> None:
@@ -54,7 +54,7 @@ def _patch_save() -> None:
     original_save = coverage.Coverage.save
 
     def save(self: coverage.Coverage) -> None:
-        _flush(self.get_data())
+        _flush(self)
         original_save(self)
 
     setattr(save, _SAVE_PATCHED_FLAG, True)
