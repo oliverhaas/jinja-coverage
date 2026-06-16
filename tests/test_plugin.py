@@ -13,19 +13,15 @@ from jinja_coverage.reporter import JinjaFileReporter
 
 
 class _StubRegistry:
-    """Mimics coverage's plugin registry: records tracers and names them."""
+    """Mimics coverage's plugin registry: records plugins and names them."""
 
     def __init__(self):
-        self.file_tracers = []
         self.configurers = []
 
-    def add_file_tracer(self, plugin):
+    def add_configurer(self, plugin):
         # coverage sets this attribute when a plugin is registered; the flush
         # path reads it back to label the data it writes.
         plugin._coverage_plugin_name = f"jinja_coverage.{type(plugin).__name__}"
-        self.file_tracers.append(plugin)
-
-    def add_configurer(self, plugin):
         self.configurers.append(plugin)
 
 
@@ -43,9 +39,10 @@ def _isolate_global_state():
 
 
 @pytest.mark.unit
-def test_file_tracer_returns_none():
-    # We use the data API, not coverage's frame tracer, so no FileTracer.
-    assert JinjaCoveragePlugin().file_tracer("/some/template.html") is None
+def test_configure_is_a_noop():
+    # We register as a configurer only to enter coverage's registry; there is
+    # nothing to configure, and it must not raise.
+    assert JinjaCoveragePlugin().configure(object()) is None
 
 
 @pytest.mark.unit
@@ -71,11 +68,11 @@ def test_coverage_init_installs_instrumentation():
 
 
 @pytest.mark.unit
-def test_coverage_init_registers_the_plugin_as_a_file_tracer():
+def test_coverage_init_registers_the_plugin_as_a_configurer():
     reg = _StubRegistry()
     jinja_coverage.coverage_init(reg, {})
-    assert len(reg.file_tracers) == 1
-    assert isinstance(reg.file_tracers[0], JinjaCoveragePlugin)
+    assert len(reg.configurers) == 1
+    assert isinstance(reg.configurers[0], JinjaCoveragePlugin)
 
 
 @pytest.mark.unit

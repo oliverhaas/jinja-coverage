@@ -1,10 +1,16 @@
 """The coverage.py plugin object for Jinja2 templates.
 
-Because we record template line hits through coverage's *data API*
-(:func:`jinja_coverage.collector.flush_into`) rather than its frame tracer, the
-plugin never returns a :class:`~coverage.plugin.FileTracer`. Its only live job
-is to hand back a :class:`~jinja_coverage.reporter.JinjaFileReporter` at report
-time, once coverage resolves a measured template back to this plugin by name.
+Template line hits are recorded through coverage's *data API*
+(:func:`jinja_coverage.collector.flush_into`), not its frame tracer, so the
+plugin never needs to act as a :class:`~coverage.plugin.FileTracer`. It registers
+as a *configurer* purely to land in coverage's plugin registry, which is what
+lets coverage resolve a measured template back to this plugin's
+:class:`~jinja_coverage.reporter.JinjaFileReporter` at report time.
+
+Registering as a configurer rather than a file tracer also avoids coverage's
+"Plugin file tracers aren't supported with SysMonitor" warning on Python 3.14+
+(where ``sys.monitoring`` is the default core); the data-API path works there
+regardless, so the warning would only be noise.
 """
 
 from collections.abc import Iterable
@@ -21,10 +27,8 @@ _INSTALLED_FLAG = "_jinja_coverage_installed"
 class JinjaCoveragePlugin(CoveragePlugin):
     """Resolves measured Jinja2 templates to their file reporters."""
 
-    def file_tracer(self, filename: str) -> None:  # noqa: ARG002
-        # Data-API plugin: we populate CoverageData directly, so there is no
-        # per-file frame tracer to return.
-        return None
+    def configure(self, config: object) -> None:
+        """No-op: registering as a configurer is only how we enter the registry."""
 
     def file_reporter(self, filename: str) -> JinjaFileReporter:
         return JinjaFileReporter(filename)

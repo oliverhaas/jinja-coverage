@@ -24,7 +24,7 @@ _SAVE_PATCHED_FLAG = "_jinja_coverage_patched"
 class _Registry(Protocol):
     """The slice of coverage's plugin registry that ``coverage_init`` uses."""
 
-    def add_file_tracer(self, plugin: object) -> None: ...
+    def add_configurer(self, plugin: object) -> None: ...
 
 
 def coverage_init(reg: _Registry, options: object) -> None:  # noqa: ARG001
@@ -33,7 +33,10 @@ def coverage_init(reg: _Registry, options: object) -> None:  # noqa: ARG001
     instrument.install()
     _patch_save()
     _plugin = JinjaCoveragePlugin()
-    reg.add_file_tracer(_plugin)
+    # Register as a configurer (not a file tracer): it lands in coverage's
+    # registry so file_reporter resolves, without tripping the SysMonitor
+    # file-tracer warning. See jinja_coverage.plugin for the rationale.
+    reg.add_configurer(_plugin)
 
 
 def _flush(data: CoverageData) -> None:
