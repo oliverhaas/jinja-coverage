@@ -209,6 +209,37 @@ def test_report_does_not_crash_on_templates_using_custom_filters(tmp_path):
     assert 3 in page["missing_lines"]  # <h2> branch not taken (subtitle is None)
 
 
+# -- exclusion pragmas --------------------------------------------------------
+
+_PRAGMA_TEMPLATE = (
+    "<p>{{ name }}</p>\n{% if debug %}{# pragma: no cover #}\n<pre>{{ dump }}</pre>\n{% endif %}\n<p>bye</p>\n"
+)
+
+_PRAGMA_RUNNER = """\
+from jinja2 import Environment, FileSystemLoader
+
+env = Environment(loader=FileSystemLoader("templates"))
+print(env.get_template("page.html").render(name="hi", debug=False))
+"""
+
+
+@pytest.mark.integration
+def test_pragma_no_cover_excludes_a_template_block_from_the_report(tmp_path):
+    # The debug block never renders (debug=False); without the pragma it would
+    # be reported missing. The default exclude regex covers {# pragma: no cover #},
+    # so the whole {% if debug %} block is excluded and coverage stays at 100%.
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "templates" / "page.html").write_text(_PRAGMA_TEMPLATE)
+    (tmp_path / "run.py").write_text(_PRAGMA_RUNNER)
+    (tmp_path / ".coveragerc").write_text("[run]\nplugins = jinja_coverage\n")
+
+    _coverage("run", "run.py", cwd=tmp_path)
+    page = _file(_report(tmp_path), "page.html")
+    assert {2, 3} <= set(page["excluded_lines"])  # the {% if debug %} header + body
+    assert page["missing_lines"] == []  # nothing counts as missing
+    assert page["summary"]["percent_covered"] == 100.0
+
+
 # -- Django Jinja2 backend, measured through the real coverage CLI ------------
 
 _DJANGO_TEMPLATE = "<p>{% if x %}yes{% else %}\nno\n{% endif %}</p>\n"

@@ -124,13 +124,54 @@ def _register_referenced_callables(env: Environment, parsed: nodes.Template) -> 
         env.tests.setdefault(node.name, _analysis_stub)
 
 
-def executable_lines(source: str, *, filename: str, name: str | None = None) -> set[int]:
-    """All instrumentable template line numbers in ``source`` (executed or not)."""
+def _parse_for_analysis(source: str, *, filename: str, name: str | None) -> tuple[Environment, nodes.Template]:
+    """Parse ``source`` with a bare env set up for structural analysis only."""
     env = Environment()  # noqa: S701 - not rendering, only compiling for analysis
     env.code_generator_class = InstrumentedCodeGenerator
-    _register_referenced_callables(env, env.parse(source, name=name, filename=filename))
-    generated = env.compile(source, name=name, filename=filename, raw=True)
+    parsed = env.parse(source, name=name, filename=filename)
+    _register_referenced_callables(env, parsed)
+    return env, parsed
+
+
+def executable_lines(source: str, *, filename: str, name: str | None = None) -> set[int]:
+    """All instrumentable template line numbers in ``source`` (executed or not)."""
+    env, parsed = _parse_for_analysis(source, filename=filename, name=name)
+    generated = env.compile(parsed, name=name, filename=filename, raw=True)
     return _linenos_from_generated(generated)
+
+
+# Node types whose template line opens a construct an exclusion pragma can cover.
+_BLOCK_NODES = (
+    nodes.If,
+    nodes.For,
+    nodes.Block,
+    nodes.Macro,
+    nodes.FilterBlock,
+    nodes.CallBlock,
+    nodes.With,
+    nodes.AssignBlock,
+)
+
+
+def block_ranges(source: str, *, filename: str, name: str | None = None) -> dict[int, int]:
+    """Map each block-opening template line to the last line of that block.
+
+    Lets an exclusion pragma on a block tag (``{% if %}``, ``{% for %}``,
+    ``{% macro %}`` ...) cover the whole construct, mirroring how coverage
+    treats a pragma on a Python block header.
+    """
+    _, parsed = _parse_for_analysis(source, filename=filename, name=name)
+    ranges: dict[int, int] = {}
+    for node in parsed.find_all(_BLOCK_NODES):
+        if node.lineno is None:  # pragma: no cover - block nodes from parse() always have a lineno
+            continue
+        last = max(
+            (child.lineno for child in node.find_all(nodes.Node) if child.lineno is not None),
+            default=node.lineno,
+        )
+        if last > ranges.get(node.lineno, 0):
+            ranges[node.lineno] = last
+    return ranges
 
 
 def _record(_environment: Environment, filename: str, linenos: int | Iterable[int]) -> None:

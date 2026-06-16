@@ -39,17 +39,42 @@ def _isolate_global_state():
 
 
 @pytest.mark.unit
-def test_configure_is_a_noop():
-    # We register as a configurer only to enter coverage's registry; there is
-    # nothing to configure, and it must not raise.
-    assert JinjaCoveragePlugin().configure(object()) is None
-
-
-@pytest.mark.unit
 def test_file_reporter_returns_jinja_reporter_for_the_path():
     reporter = JinjaCoveragePlugin().file_reporter("/some/template.html")
     assert isinstance(reporter, JinjaFileReporter)
     assert reporter.filename == "/some/template.html"
+
+
+class _StubConfig:
+    """A minimal TConfigurable: returns coverage options by name."""
+
+    def __init__(self, **options):
+        self._options = options
+
+    def get_option(self, option_name):
+        return self._options.get(option_name)
+
+    def set_option(self, option_name, value):
+        self._options[option_name] = value
+
+
+@pytest.mark.unit
+def test_configure_threads_exclude_patterns_into_the_file_reporter():
+    plugin = JinjaCoveragePlugin()
+    plugin.configure(
+        _StubConfig(**{"report:exclude_lines": [r"pragma:\s*no\s*cover"], "report:exclude_also": [r"DEBUG ONLY"]}),
+    )
+    reporter = plugin.file_reporter("/t.html")
+    assert reporter._exclude_regex is not None
+    assert reporter._exclude_regex.search("x {# pragma: no cover #}")
+    assert reporter._exclude_regex.search("y {# DEBUG ONLY #}")
+
+
+@pytest.mark.unit
+def test_configure_without_exclude_patterns_leaves_the_reporter_unfiltered():
+    plugin = JinjaCoveragePlugin()
+    plugin.configure(_StubConfig())
+    assert plugin.file_reporter("/t.html")._exclude_regex is None
 
 
 @pytest.mark.unit
