@@ -151,6 +151,33 @@ def test_branch_arcs_empty_without_a_filename():
     assert instrument.branch_arcs("{% if a %}\nX\n{% endif %}\n", filename="") == set()
 
 
+@pytest.mark.unit
+def test_branch_arcs_of_a_for_loop_include_iterate_and_skip():
+    # 1 {% for i in xs %} / 2 body / 3 {% endfor %} / 4 after
+    src = "{% for i in xs %}\nbody\n{% endfor %}\nafter\n"
+    arcs = instrument.branch_arcs(src, filename="/p.html")
+    assert (1, 2) in arcs  # iterated at least once -> body
+    assert (1, 4) in arcs  # zero iterations -> skip to the line after the loop
+
+
+@pytest.mark.unit
+def test_branch_arcs_of_a_for_else_target_body_and_else_arms():
+    # 1 for / 2 body / 3 else / 4 empty / 5 endfor / 6 after
+    src = "{% for i in xs %}\nbody\n{% else %}\nempty\n{% endfor %}\nafter\n"
+    assert instrument.branch_arcs(src, filename="/p.html") == {(1, 2), (1, 4)}
+
+
+@pytest.mark.unit
+def test_branch_arcs_of_an_if_inside_a_loop_target_its_sibling():
+    # 1 for / 2 if / 3 yes / 4 endif / 5 tail / 6 endfor / 7 after. The inner if
+    # is followed by a sibling, so its skip arc targets that sibling (line 5),
+    # not a loop-back artifact.
+    src = "{% for i in xs %}\n{% if i %}\nyes\n{% endif %}\ntail\n{% endfor %}\nafter\n"
+    arcs = instrument.branch_arcs(src, filename="/p.html")
+    assert {(1, 2), (1, 7)} <= arcs  # loop iterate -> body, skip -> after
+    assert {(2, 3), (2, 5)} <= arcs  # if true -> yes, false -> the sibling tail
+
+
 # -- render-time recording ----------------------------------------------------
 
 
@@ -184,6 +211,35 @@ def test_render_records_only_the_taken_branch_arc(tmp_path):
 
 
 @pytest.mark.unit
+def test_render_records_the_for_loop_iterate_arc_but_not_the_skip(tmp_path):
+    tmpl = tmp_path / "p.html"
+    # 1 {% for i in xs %} / 2 body / 3 {% endfor %} / 4 after
+    tmpl.write_text("{% for i in xs %}\nbody\n{% endfor %}\nafter\n")
+    instrument.install()
+
+    env = Environment(loader=FileSystemLoader(str(tmp_path)))
+    env.get_template("p.html").render(xs=[1, 2])  # always iterates
+
+    arcs = collector.collected_arcs()[os.path.realpath(str(tmpl))]
+    assert (1, 2) in arcs  # entered the loop body
+    assert (1, 4) not in arcs  # never skipped the loop (no zero-iteration render)
+
+
+@pytest.mark.unit
+def test_render_records_the_for_loop_skip_arc_when_empty(tmp_path):
+    tmpl = tmp_path / "p.html"
+    tmpl.write_text("{% for i in xs %}\nbody\n{% endfor %}\nafter\n")
+    instrument.install()
+
+    env = Environment(loader=FileSystemLoader(str(tmp_path)))
+    env.get_template("p.html").render(xs=[])  # zero iterations
+
+    arcs = collector.collected_arcs()[os.path.realpath(str(tmpl))]
+    assert (1, 4) in arcs  # skipped the loop straight to the line after it
+    assert (1, 2) not in arcs  # body never entered
+
+
+@pytest.mark.unit
 def test_compiled_template_has_untraceable_co_filename(tmp_path):
     tmpl = tmp_path / "p.html"
     tmpl.write_text("<p>{{ x }}</p>\n")
@@ -201,6 +257,16 @@ def test_from_string_without_filename_records_nothing_and_renders():
     instrument.install()
     env = Environment()
     assert env.from_string("<p>{{ x }}</p>").render(x=1) == "<p>1</p>"
+    assert collector.collected() == {}
+
+
+@pytest.mark.unit
+def test_from_string_loop_without_filename_records_nothing_and_renders():
+    # A filename-less template containing a loop must still render: with no file
+    # to attribute arcs to, visit_For emits no dead-code arc block.
+    instrument.install()
+    env = Environment()
+    assert env.from_string("{% for i in xs %}{{ i }}{% endfor %}").render(xs=[1, 2]) == "12"
     assert collector.collected() == {}
 
 

@@ -68,20 +68,19 @@ def _record_linenos(node: nodes.Node) -> list[int]:
     return [lineno] if lineno else []
 
 
-def _first_line(node: nodes.Node) -> int | None:
-    """The first template line recorded when ``node`` executes."""
-    recorded = _record_linenos(node)
-    if recorded:
-        return recorded[0]
-    return getattr(node, "lineno", None)
-
-
 def _branch_first(body: list[nodes.Node], fallback: int | None) -> int | None:
-    """First executable line of a branch ``body``, or ``fallback`` if empty."""
+    """First template line ``body`` records when reached, or ``fallback`` if none.
+
+    Non-recording nodes (e.g. the whitespace-only output emitted between two
+    tags) are skipped: control flows straight through them to the first line
+    that actually records, mirroring what consecutive recording sees at render
+    time. Using a node's bare ``lineno`` here would mis-target an arc at a line
+    that never records.
+    """
     for node in body:
-        line = _first_line(node)
-        if line is not None:
-            return line
+        recorded = _record_linenos(node)
+        if recorded:
+            return recorded[0]
     return fallback
 
 
@@ -116,8 +115,10 @@ class InstrumentedCodeGenerator(CodeGenerator):
         try:
             self.writeline("pass")
             for index, node in enumerate(node_list):
-                following = node_list[index + 1] if index + 1 < len(node_list) else None
-                self._node_successor[id(node)] = _first_line(following) if following is not None else block_successor
+                # A node's successor is the first line its following siblings
+                # record (skipping transparent whitespace nodes), or the block's
+                # own successor if none of them record.
+                self._node_successor[id(node)] = _branch_first(node_list[index + 1 :], block_successor)
                 self._emit_record(node)
                 self.visit(node, frame)
         except CompilerExit:
@@ -157,6 +158,28 @@ class InstrumentedCodeGenerator(CodeGenerator):
             self.writeline("pass")
         self.outdent()
 
+    def visit_For(self, node: nodes.For, frame: Frame) -> None:  # noqa: N802 - overrides jinja's visit_For
+        # Jinja's visit_For is large and fragile to reimplement, so rather than
+        # injecting arc records into the loop body, the loop's *executed* arcs
+        # are recovered from consecutive line recording (entered -> body line,
+        # zero iterations -> the skip target). Only the *possible* arcs are
+        # emitted here, as unreachable code purely for branch_arcs() to extract.
+        successor = self._node_successor.get(id(node), _EXIT)
+        body_first = _branch_first(node.body, successor)
+        # Zero iterations runs the {% else %} arm if present, else the successor.
+        skip_target = _branch_first(node.else_, successor)
+        self._emit_dead_arcs([(node.lineno, body_first), (node.lineno, skip_target)])
+        # A nested branch in the loop body flows on to its own next sibling; only
+        # for a branch at the very tail does control loop back to the body's first
+        # line, so push that as the body's successor. (A branch that is the sole
+        # statement of the body degenerates onto the back-edge and isn't tracked
+        # separately - the inherent limit of a line-based model of a loop.)
+        self._successor_stack.append(body_first)
+        try:
+            super().visit_For(node, frame)
+        finally:
+            self._successor_stack.pop()
+
     def _visit_branch_body(self, body: list[nodes.Node], frame: Frame, successor: int | None) -> None:
         self._successor_stack.append(successor)
         try:
@@ -173,10 +196,29 @@ class InstrumentedCodeGenerator(CodeGenerator):
         arg = linenos[0] if len(linenos) == 1 else tuple(linenos)
         self.writeline(f"environment.{_RECORD_FUNC}({self.filename!r}, {arg!r})")
 
+    def _write_arc_call(self, prev: int, following: int) -> None:
+        self.writeline(f"environment.{_ARC_FUNC}({self.filename!r}, {(prev, following)!r})")
+
     def _emit_arc(self, prev: int | None, following: int | None) -> None:
         if not self.filename or prev is None or following is None or prev == following:
             return
-        self.writeline(f"environment.{_ARC_FUNC}({self.filename!r}, {(prev, following)!r})")
+        self._write_arc_call(prev, following)
+
+    def _emit_dead_arcs(self, arcs: list[tuple[int | None, int | None]]) -> None:
+        """Emit possible branch arcs as unreachable code, for static extraction only.
+
+        Used where injecting a real render-time arc record would be fragile
+        (loops): :func:`branch_arcs` recovers these by parsing the generated
+        source, while the executed arcs come from consecutive line recording.
+        """
+        distinct = sorted({(p, n) for p, n in arcs if p is not None and n is not None and p != n})
+        if not self.filename or not distinct:
+            return
+        self.writeline("if 0:")
+        self.indent()
+        for prev, following in distinct:
+            self._write_arc_call(prev, following)
+        self.outdent()
 
 
 def _linenos_from_generated(generated_source: str) -> set[int]:

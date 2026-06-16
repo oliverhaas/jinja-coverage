@@ -294,6 +294,33 @@ def test_branch_mode_full_coverage_when_both_arms_run(tmp_path):
     assert page["summary"]["percent_covered"] == 100.0
 
 
+# 1 {% for i in items %} / 2 <li> / 3 {% endfor %} / 4 done. Rendered only with a
+# non-empty list, so the zero-iteration (skip) path 1 -> 4 is never taken.
+_FOR_BRANCH_TEMPLATE = "{% for i in items %}\n<li>{{ i }}</li>\n{% endfor %}\n<p>done</p>\n"
+
+
+@pytest.mark.integration
+def test_branch_mode_reports_an_unskipped_for_loop(tmp_path):
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "templates" / "page.html").write_text(_FOR_BRANCH_TEMPLATE)
+    (tmp_path / "run.py").write_text(
+        "from jinja2 import Environment, FileSystemLoader\n"
+        'env = Environment(loader=FileSystemLoader("templates"))\n'
+        'env.get_template("page.html").render(items=[1, 2])\n',
+    )
+    (tmp_path / ".coveragerc").write_text("[run]\nplugins = jinja_coverage\nbranch = true\n")
+
+    _coverage("run", "run.py", cwd=tmp_path)
+    page = _file(_report(tmp_path), "page.html")
+
+    assert page["executed_lines"] == [1, 2, 4]
+    assert page["missing_lines"] == []
+    # The loop iterated but was never skipped: the zero-iteration arc is missing.
+    assert page["missing_branches"] == [[1, 4]]
+    assert page["summary"]["num_branches"] == 2
+    assert page["summary"]["num_partial_branches"] == 1
+
+
 # -- Django Jinja2 backend, measured through the real coverage CLI ------------
 
 _DJANGO_TEMPLATE = "<p>{% if x %}yes{% else %}\nno\n{% endif %}</p>\n"
