@@ -110,13 +110,17 @@ explicit opt-in for envs created before coverage starts. Resolve during the spik
 
 ## Milestones
 
-1. PoC proves instrument + integrate + combine (Step 1).
-2. Line coverage for standalone Jinja2, broad node coverage, real HTML report.
-3. Full coverage.py integration: `combine`, `fail-under`, `report`/`html`/`xml`.
-4. Django Jinja2 backend support (test harness already scaffolded in `tests/settings.py`).
-5. Branch coverage (match jinjatest's branch set: if/elif/else, for, macro, include, ternary).
-6. Exclusion pragmas (e.g. a `{# pragma: no cover #}` equivalent), `excluded_lines()`.
-7. Docs + first release.
+1. PoC proves instrument + integrate + combine (Step 1). **DONE**
+2. Line coverage for standalone Jinja2, broad node coverage, real HTML report. **DONE**
+3. Full coverage.py integration: `combine`, `fail-under`, `report`/`html`/`xml`. **DONE**
+4. Django Jinja2 backend support (test harness already scaffolded in `tests/settings.py`). **DONE**
+5. Branch coverage. **DONE** for `{% if %}`/`{% elif %}`/`{% else %}` and `{% for %}` iterate/skip,
+   including branches nested inside macros, includes, and inheritance blocks. Out of scope (line-based
+   model): single-line conditionals and `{{ a if x else b }}` ternaries (both arms share a line), and a
+   branch that is the sole/final statement of a loop body (folds onto the loop back-edge).
+6. Exclusion pragmas (a `{# pragma: no cover #}` equivalent), `excluded_lines()`. **DONE** (line and
+   whole-block, honoring custom `exclude_lines`/`exclude_also`).
+7. Docs + first release. Docs **DONE**; release pending.
 
 ## Open questions / risks
 
