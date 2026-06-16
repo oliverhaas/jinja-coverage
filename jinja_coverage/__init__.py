@@ -7,6 +7,7 @@ render-time hits collected in :mod:`jinja_coverage.collector` land in the same
 ``.coverage`` data file as Python coverage.
 """
 
+from collections.abc import Mapping
 from typing import Protocol
 
 import coverage
@@ -26,16 +27,31 @@ class _Registry(Protocol):
     def add_configurer(self, plugin: object) -> None: ...
 
 
-def coverage_init(reg: _Registry, options: object) -> None:  # noqa: ARG001
-    """Register the Jinja2 plugin with coverage.py (the ``plugins =`` entry point)."""
+def coverage_init(reg: _Registry, options: Mapping[str, str]) -> None:
+    """Register the Jinja2 plugin with coverage.py (the ``plugins =`` entry point).
+
+    ``options`` is the ``[jinja_coverage]`` config section coverage passes to
+    each plugin; its ``extensions`` key declares custom Jinja extensions to load
+    when analyzing templates for their executable lines.
+    """
     global _plugin  # noqa: PLW0603
     instrument.install()
+    instrument.set_analysis_extensions(_configured_extensions(options))
     _patch_save()
     _plugin = JinjaCoveragePlugin()
     # Register as a configurer (not a file tracer): it lands in coverage's
     # registry so file_reporter resolves, without tripping the SysMonitor
     # file-tracer warning. See jinja_coverage.plugin for the rationale.
     reg.add_configurer(_plugin)
+
+
+def _configured_extensions(options: Mapping[str, str]) -> list[str]:
+    """Dotted import paths of custom Jinja extensions from the coverage config.
+
+    The ``[jinja_coverage] extensions`` value is a free-form string; split it on
+    commas and whitespace into individual import paths.
+    """
+    return options.get("extensions", "").replace(",", " ").split()
 
 
 def _flush(cov: coverage.Coverage) -> None:

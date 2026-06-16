@@ -5,11 +5,16 @@ import os
 import coverage
 import pytest
 from jinja2 import Environment
+from jinja2.ext import Extension
 
 import jinja_coverage
 from jinja_coverage import collector, instrument
 from jinja_coverage.plugin import JinjaCoveragePlugin
 from jinja_coverage.reporter import JinjaFileReporter
+
+
+class _CoverageTestExtension(Extension):
+    """A no-op Jinja extension, imported by dotted path to verify config wiring."""
 
 
 class _StubRegistry:
@@ -31,6 +36,7 @@ def _isolate_global_state():
     yield
     coverage.Coverage.save = original_save
     instrument.uninstall()
+    instrument._reset_analysis_state()
     jinja_coverage._plugin = None
     collector.clear()
 
@@ -98,6 +104,28 @@ def test_coverage_init_registers_the_plugin_as_a_configurer():
     jinja_coverage.coverage_init(reg, {})
     assert len(reg.configurers) == 1
     assert isinstance(reg.configurers[0], JinjaCoveragePlugin)
+
+
+@pytest.mark.unit
+def test_coverage_init_loads_configured_extensions_for_analysis():
+    # A custom extension declared in the [jinja_coverage] config section (passed
+    # to coverage_init as options) is loaded into the analysis env, on top of the
+    # always-present standard extensions.
+    jinja_coverage.coverage_init(_StubRegistry(), {"extensions": "tests.test_plugin._CoverageTestExtension"})
+    extensions = instrument.get_analysis_extensions()
+    assert "tests.test_plugin._CoverageTestExtension" in extensions
+    assert "jinja2.ext.do" in extensions  # defaults are always kept
+
+
+@pytest.mark.unit
+def test_coverage_init_warns_and_skips_an_unimportable_extension():
+    # A misconfigured extension path must not crash the report later; it is
+    # dropped with a warning, leaving the standard extensions intact.
+    with pytest.warns(UserWarning, match="unimportable"):
+        jinja_coverage.coverage_init(_StubRegistry(), {"extensions": "no.such.module.Nope"})
+    extensions = instrument.get_analysis_extensions()
+    assert "no.such.module.Nope" not in extensions
+    assert "jinja2.ext.do" in extensions
 
 
 @pytest.mark.unit

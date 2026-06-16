@@ -19,11 +19,15 @@ Two class-level hooks are installed on :class:`jinja2.Environment`:
 """
 
 import ast
+import warnings
 from collections.abc import Iterable
 from types import CodeType
 
 from jinja2 import Environment, nodes
+from jinja2.bccache import BytecodeCache
 from jinja2.compiler import CodeGenerator, CompilerExit, Frame
+from jinja2.exceptions import TemplateSyntaxError
+from jinja2.utils import import_string
 
 from jinja_coverage import collector
 
@@ -37,6 +41,26 @@ _RECORD_ARG_COUNT = 2
 # ``{% if %}`` skipped at the very end). coverage.py uses negative line numbers
 # for entering/exiting a code object.
 _EXIT = -1
+
+# Standard Jinja extensions that register their own tags. The analysis env is
+# never the application's own environment, so it would not otherwise know these
+# tags; loading them by default lets a template using {% do %}, {% break %}/
+# {% continue %}, {% trans %} or {% debug %} be analyzed instead of aborting the
+# report with "Encountered unknown tag".
+_DEFAULT_ANALYSIS_EXTENSIONS: tuple[str, ...] = (
+    "jinja2.ext.do",
+    "jinja2.ext.loopcontrols",
+    "jinja2.ext.i18n",
+    "jinja2.ext.debug",
+)
+
+# Suffix mixed into the bytecode-cache key while instrumentation is installed.
+# Jinja keys its cache on template name + source only, not the code generator,
+# so without this an instrumented run would reuse bytecode a cache was warmed
+# with while coverage was inactive (which carries no record calls) and measure
+# nothing - and writing instrumented bytecode under the app's own key would
+# leave its production cache full of record calls that raise once uninstalled.
+_CACHE_KEY_SALT = ".jinja-coverage"
 
 
 def _output_linenos(node: nodes.Output) -> set[int]:
@@ -279,13 +303,69 @@ def _analysis_stub(*_args: object, **_kwargs: object) -> str:
     return ""
 
 
+_analysis_extensions: tuple[str, ...] = _DEFAULT_ANALYSIS_EXTENSIONS
+# Templates already warned about as unanalyzable, so the warning fires once per
+# file rather than once per analysis pass (lines/arcs/block-ranges each parse).
+_unanalyzable_warned: set[str] = set()
+
+
+def set_analysis_extensions(extensions: Iterable[str]) -> None:
+    """Add custom Jinja extensions to load when parsing templates for analysis.
+
+    The standard tag-registering extensions are always kept, so this only adds
+    the application's own extensions on top. Each is validated by importing it;
+    an unimportable entry is skipped with a warning rather than crashing the
+    report later, when the analysis env would fail to construct.
+    """
+    global _analysis_extensions  # noqa: PLW0603
+    extra: list[str] = []
+    for extension in extensions:
+        try:
+            import_string(extension)
+        except (ImportError, AttributeError) as exc:
+            warnings.warn(
+                f"jinja-coverage: ignoring unimportable Jinja extension {extension!r} "
+                f"from the [jinja_coverage] 'extensions' option ({exc}).",
+                stacklevel=2,
+            )
+            continue
+        extra.append(extension)
+    _analysis_extensions = tuple(dict.fromkeys((*_DEFAULT_ANALYSIS_EXTENSIONS, *extra)))
+
+
+def get_analysis_extensions() -> tuple[str, ...]:
+    """The Jinja extensions currently loaded into the analysis env."""
+    return _analysis_extensions
+
+
+def _reset_analysis_state() -> None:
+    """Restore analysis extensions to their defaults and clear the warning dedup."""
+    global _analysis_extensions  # noqa: PLW0603
+    _analysis_extensions = _DEFAULT_ANALYSIS_EXTENSIONS
+    _unanalyzable_warned.clear()
+
+
+def _warn_unanalyzable(filename: str, error: Exception) -> None:
+    """Warn once per template that analysis failed, so the report can continue."""
+    if filename in _unanalyzable_warned:
+        return
+    _unanalyzable_warned.add(filename)
+    warnings.warn(
+        f"jinja-coverage could not analyze template {filename!r} ({error}); it will be "
+        f"reported as having no measurable lines. If it uses a custom Jinja extension, "
+        f"declare it via the 'extensions' option in the [jinja_coverage] section of your "
+        f"coverage config.",
+        stacklevel=3,
+    )
+
+
 def _register_referenced_callables(env: Environment, parsed: nodes.Template) -> None:
     """Stub any filters/tests ``parsed`` references but the analysis env lacks.
 
-    We only compile ``source`` to recover its instrumentable line set, using a
-    bare env that has none of the app's custom filters/tests. Jinja's codegen
-    aborts on an unknown filter/test name, so register no-op stubs first; they
-    don't change which lines carry a record, only whether compilation succeeds.
+    We only compile ``source`` to recover its instrumentable line set, using an
+    env that has none of the app's custom filters/tests. Jinja's codegen aborts
+    on an unknown filter/test name, so register no-op stubs first; they don't
+    change which lines carry a record, only whether compilation succeeds.
     """
     for node in parsed.find_all(nodes.Filter):
         env.filters.setdefault(node.name, _analysis_stub)
@@ -294,8 +374,12 @@ def _register_referenced_callables(env: Environment, parsed: nodes.Template) -> 
 
 
 def _parse_for_analysis(source: str, *, filename: str, name: str | None) -> tuple[Environment, nodes.Template]:
-    """Parse ``source`` with a bare env set up for structural analysis only."""
-    env = Environment()  # noqa: S701 - not rendering, only compiling for analysis
+    """Parse ``source`` with an env set up for structural analysis only.
+
+    The env loads the standard (and any configured) Jinja extensions so their
+    tags parse, but it is never rendered, only compiled to recover the line set.
+    """
+    env = Environment(extensions=_analysis_extensions)  # noqa: S701 - not rendering, only compiling
     env.code_generator_class = InstrumentedCodeGenerator
     parsed = env.parse(source, name=name, filename=filename)
     _register_referenced_callables(env, parsed)
@@ -303,9 +387,18 @@ def _parse_for_analysis(source: str, *, filename: str, name: str | None) -> tupl
 
 
 def executable_lines(source: str, *, filename: str, name: str | None = None) -> set[int]:
-    """All instrumentable template line numbers in ``source`` (executed or not)."""
-    env, parsed = _parse_for_analysis(source, filename=filename, name=name)
-    generated = env.compile(parsed, name=name, filename=filename, raw=True)
+    """All instrumentable template line numbers in ``source`` (executed or not).
+
+    Degrades to an empty set (with a one-time warning) if the template can't be
+    parsed, e.g. it uses an undeclared custom extension tag, so one unanalyzable
+    template never aborts the whole coverage report.
+    """
+    try:
+        env, parsed = _parse_for_analysis(source, filename=filename, name=name)
+        generated = env.compile(parsed, name=name, filename=filename, raw=True)
+    except TemplateSyntaxError as exc:
+        _warn_unanalyzable(filename, exc)
+        return set()
     return _linenos_from_generated(generated)
 
 
@@ -313,10 +406,15 @@ def branch_arcs(source: str, *, filename: str, name: str | None = None) -> set[t
     """All possible branch arcs in ``source``, as ``(if-line, branch-entry)`` pairs.
 
     Derived from the *same* instrumentation that records arcs at render time, so
-    an executed arc can never fall outside this possible set.
+    an executed arc can never fall outside this possible set. Degrades to an
+    empty set if the template can't be parsed (see :func:`executable_lines`).
     """
-    env, parsed = _parse_for_analysis(source, filename=filename, name=name)
-    generated = env.compile(parsed, name=name, filename=filename, raw=True)
+    try:
+        env, parsed = _parse_for_analysis(source, filename=filename, name=name)
+        generated = env.compile(parsed, name=name, filename=filename, raw=True)
+    except TemplateSyntaxError as exc:
+        _warn_unanalyzable(filename, exc)
+        return set()
     return _arcs_from_generated(generated)
 
 
@@ -338,9 +436,14 @@ def block_ranges(source: str, *, filename: str, name: str | None = None) -> dict
 
     Lets an exclusion pragma on a block tag (``{% if %}``, ``{% for %}``,
     ``{% macro %}`` ...) cover the whole construct, mirroring how coverage
-    treats a pragma on a Python block header.
+    treats a pragma on a Python block header. Degrades to an empty mapping if
+    the template can't be parsed (see :func:`executable_lines`).
     """
-    _, parsed = _parse_for_analysis(source, filename=filename, name=name)
+    try:
+        _, parsed = _parse_for_analysis(source, filename=filename, name=name)
+    except TemplateSyntaxError as exc:
+        _warn_unanalyzable(filename, exc)
+        return {}
     ranges: dict[int, int] = {}
     for node in parsed.find_all(_BLOCK_NODES):
         if node.lineno is None:  # pragma: no cover - block nodes from parse() always have a lineno
@@ -366,10 +469,23 @@ def _compile_with_sentinel(_environment: Environment, source: str, filename: str
     return compile(source, f"<jinja-template:{filename}>", "exec")
 
 
+def _instrumented_get_cache_key(self: BytecodeCache, name: str, filename: str | None = None) -> str:
+    """A salted bytecode-cache key, so instrumented bytecode gets its own slot.
+
+    Jinja keys its cache on template name + source, not the code generator, so
+    instrumented and uninstrumented bytecode would otherwise collide on one key.
+    The salt keeps them in separate cache entries: the instrumented run never
+    reuses a cache warmed without coverage, and the app's own cache file is
+    never overwritten with record-call bytecode that would raise once removed.
+    """
+    return _DEFAULT_GET_CACHE_KEY(self, name, filename) + _CACHE_KEY_SALT
+
+
 # Jinja2's pristine defaults, captured at import (before any install) so uninstall
 # can restore them with their exact types intact.
 _DEFAULT_CODE_GENERATOR_CLASS = Environment.code_generator_class
 _DEFAULT_COMPILE = Environment._compile  # noqa: SLF001
+_DEFAULT_GET_CACHE_KEY = BytecodeCache.get_cache_key
 
 
 def install() -> None:
@@ -379,6 +495,7 @@ def install() -> None:
     Environment.code_generator_class = InstrumentedCodeGenerator
     # Monkeypatching jinja's compile hook; the type checker can't model it.
     Environment._compile = _compile_with_sentinel  # ty: ignore[invalid-assignment]  # noqa: SLF001
+    BytecodeCache.get_cache_key = _instrumented_get_cache_key  # ty: ignore[invalid-assignment]
     setattr(Environment, _RECORD_FUNC, _record)
     setattr(Environment, _ARC_FUNC, _record_arc)
     setattr(Environment, _INSTALLED_FLAG, True)
@@ -390,6 +507,7 @@ def uninstall() -> None:
         return
     Environment.code_generator_class = _DEFAULT_CODE_GENERATOR_CLASS
     Environment._compile = _DEFAULT_COMPILE  # noqa: SLF001
+    BytecodeCache.get_cache_key = _DEFAULT_GET_CACHE_KEY
     if _RECORD_FUNC in Environment.__dict__:
         delattr(Environment, _RECORD_FUNC)
     if _ARC_FUNC in Environment.__dict__:

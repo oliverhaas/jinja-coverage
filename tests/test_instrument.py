@@ -3,9 +3,11 @@
 import ast
 import os
 import traceback
+import warnings
 
 import pytest
 from jinja2 import Environment, FileSystemLoader, nodes
+from jinja2.bccache import FileSystemBytecodeCache
 from jinja2.compiler import CodeGenerator
 
 from jinja_coverage import collector, instrument
@@ -16,6 +18,7 @@ def _reset():
     collector.clear()
     yield
     instrument.uninstall()
+    instrument._reset_analysis_state()
     collector.clear()
 
 
@@ -84,6 +87,38 @@ def test_executable_lines_handles_unknown_filters_and_tests():
     src = "<h1>{{ title | shout }}</h1>\n{% if x is weird %}\n{{ a }}\n{% endif %}\n"
     lines = instrument.executable_lines(src, filename="/p.html")
     assert {1, 2, 3} <= lines
+
+
+@pytest.mark.unit
+def test_executable_lines_handles_standard_extension_tags():
+    # The analysis env is not the app's own environment, so it would not know
+    # extension tags. It loads the standard tag-registering extensions, so a
+    # template using {% do %} (jinja2.ext.do) or {% continue %} (loopcontrols)
+    # yields its line set instead of raising "Encountered unknown tag".
+    src = "{% do items.append(1) %}\n{% for i in xs %}\n{% continue %}\n{% endfor %}\n"
+    lines = instrument.executable_lines(src, filename="/p.html")
+    assert {1, 2, 3} <= lines
+
+
+@pytest.mark.unit
+def test_executable_lines_handles_i18n_trans_blocks():
+    # {% trans %} comes from jinja2.ext.i18n, also loaded for analysis.
+    assert 1 in instrument.executable_lines("{% trans %}hi{% endtrans %}\n", filename="/p.html")
+
+
+@pytest.mark.unit
+def test_analysis_degrades_to_empty_and_warns_once_on_an_unknown_tag():
+    # A custom/undeclared extension tag can't be parsed by the analysis env. Each
+    # analysis entry point must degrade (an empty result) and warn once per file
+    # rather than raising, so one such template can't abort the whole report.
+    src = "{% mystery %}\n<p>hi</p>\n"
+    with pytest.warns(UserWarning, match="could not analyze"):
+        assert instrument.executable_lines(src, filename="/u.html") == set()
+    # Later passes over the same file degrade the same way but never re-warn.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # a second warning here would raise
+        assert instrument.branch_arcs(src, filename="/u.html") == set()
+        assert instrument.block_ranges(src, filename="/u.html") == {}
 
 
 @pytest.mark.unit
@@ -265,6 +300,35 @@ def test_render_records_the_for_loop_skip_arc_when_empty(tmp_path):
     arcs = collector.collected_arcs()[os.path.realpath(str(tmpl))]
     assert (1, 4) in arcs  # skipped the loop straight to the line after it
     assert (1, 2) not in arcs  # body never entered
+
+
+@pytest.mark.unit
+def test_render_ignores_a_bytecode_cache_warmed_without_instrumentation(tmp_path):
+    # A Jinja bytecode cache warmed while coverage was inactive holds
+    # uninstrumented bytecode (no record calls). Jinja keys its cache on template
+    # name + source, not the code generator, so without salting the key the
+    # instrumented run would silently reuse that stale entry and record nothing.
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    cache_dir = tmp_path / "bcc"
+    cache_dir.mkdir()
+    (templates / "p.html").write_text("{% if x %}\nyes\n{% endif %}\ndone\n")
+
+    def render():
+        env = Environment(
+            loader=FileSystemLoader(str(templates)),
+            bytecode_cache=FileSystemBytecodeCache(str(cache_dir)),
+        )
+        env.get_template("p.html").render(x=True)
+
+    render()  # warm the cache with uninstrumented bytecode (not installed yet)
+    collector.clear()
+    instrument.install()
+    render()  # the instrumented run must not reuse the stale cache entry
+
+    path = os.path.realpath(str(templates / "p.html"))
+    assert path in collector.collected()
+    assert {1, 2} <= collector.collected()[path]
 
 
 @pytest.mark.unit

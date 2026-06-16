@@ -209,6 +209,47 @@ def test_report_does_not_crash_on_templates_using_custom_filters(tmp_path):
     assert 3 in page["missing_lines"]  # <h2> branch not taken (subtitle is None)
 
 
+# -- extension tags: report generation must not crash -------------------------
+
+# 1 {% do %} (jinja2.ext.do) / 2 {% for %} / 3 {% if %}{% continue %}{% endif %}
+# (jinja2.ext.loopcontrols) / 4 body / 5 {% endfor %}.
+_EXTENSION_TEMPLATE = (
+    "{% do nums.append(1) %}\n"
+    "{% for n in nums %}\n"
+    "{% if n == 0 %}{% continue %}{% endif %}\n"
+    "<li>{{ n }}</li>\n"
+    "{% endfor %}\n"
+)
+
+_EXTENSION_RUNNER = """\
+from jinja2 import Environment, FileSystemLoader
+
+env = Environment(
+    loader=FileSystemLoader("templates"),
+    extensions=["jinja2.ext.do", "jinja2.ext.loopcontrols"],
+)
+print(env.get_template("page.html").render(nums=[]))
+"""
+
+
+@pytest.mark.integration
+def test_report_does_not_crash_on_templates_using_extension_tags(tmp_path):
+    # Regression: the reporter re-parses each template to find executable lines.
+    # The analysis env didn't load extensions, so a template using a standard
+    # extension tag ({% do %}, {% continue %}) raised "Encountered unknown tag",
+    # which aborted the entire report - Python coverage included. The analysis
+    # env now loads the standard extensions, so it is measured normally.
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "templates" / "page.html").write_text(_EXTENSION_TEMPLATE)
+    (tmp_path / "run.py").write_text(_EXTENSION_RUNNER)
+    (tmp_path / ".coveragerc").write_text("[run]\nplugins = jinja_coverage\n")
+
+    _coverage("run", "run.py", cwd=tmp_path)
+    page = _file(_report(tmp_path), "page.html")  # _report raises if json crashed
+    # The {% do %} line and the {% continue %}-guarded loop body are measured.
+    assert {1, 2, 3, 4} <= set(page["executed_lines"])
+
+
 # -- exclusion pragmas --------------------------------------------------------
 
 _PRAGMA_TEMPLATE = (
