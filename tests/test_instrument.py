@@ -165,6 +165,15 @@ def test_branch_arcs_of_an_if_at_the_block_end_skip_to_exit():
 
 
 @pytest.mark.unit
+def test_branch_arcs_of_an_inline_if_else_has_no_trackable_branch():
+    # Both arms share line 1, so there is no distinct line-to-line arc: a
+    # single-line conditional cannot be a branch in a line-based model (the same
+    # limitation coverage has for a Python one-liner).
+    src = "{% if x %}yes{% else %}no{% endif %}\n"
+    assert instrument.branch_arcs(src, filename="/p.html") == set()
+
+
+@pytest.mark.unit
 def test_branch_arcs_empty_without_a_filename():
     # from_string templates (filename=None) are not measured, so emit no arcs.
     assert instrument.branch_arcs("{% if a %}\nX\n{% endif %}\n", filename="") == set()
