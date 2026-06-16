@@ -1,0 +1,98 @@
+[project]
+name = "jinja-coverage"
+version = "0.1.0a1"
+description = "coverage.py plugin for measuring Jinja2 template coverage"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.14"
+keywords = ["jinja2", "coverage", "templates", "testing", "coverage.py"]
+authors = [{ name = "Oliver Haas", email = "ohaas@e1plus.de" }]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Testing",
+  "Typing :: Typed",
+]
+dependencies = ["coverage>=7.0", "jinja2>=3.1"]
+
+[project.optional-dependencies]
+django = ["django>=6.0"]
+
+[project.urls]
+Homepage = "https://github.com/oliverhaas/jinja-coverage"
+Repository = "https://github.com/oliverhaas/jinja-coverage.git"
+
+[dependency-groups]
+dev = [
+  "django>=6.0",
+  "pre-commit==4.6.0",
+  "pytest==9.0.3",
+  "pytest-cov==7.1.0",
+  "pytest-django==4.12.0",
+  "pytest-xdist==3.8.0",
+  "ruff==0.15.14",
+  "ty==0.0.39",
+]
+
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["jinja_coverage"]
+
+[tool.hatch.build.targets.sdist]
+include = ["jinja_coverage", "LICENSE", "README.md"]
+
+[tool.ruff]
+fix = true
+line-length = 120
+target-version = "py314"
+
+[tool.ruff.lint]
+ignore = ["COM812", "D", "E501", "EM", "TRY003"]
+select = ["ALL"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+  "ANN",
+  "ARG",
+  "F841",
+  "FBT",
+  "PT006",
+  "PT011",
+  "PT013",
+  "PT018",
+  "S101",
+  "S105",
+]
+
+[tool.ty.environment]
+python-version = "3.14"
+
+[[tool.ty.overrides]]
+include = ["tests/**"]
+
+[tool.ty.overrides.rules]
+unresolved-attribute = "ignore"
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "settings"
+addopts = "--cov=jinja_coverage --cov-report=term-missing --cov-report=xml --no-cov-on-fail"
+markers = ["unit: fast, isolated unit tests"]
+pythonpath = ["tests"]
+testpaths = ["tests"]
+xfail_strict = true
+
+[tool.coverage.run]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+precision = 2
+skip_covered = true
