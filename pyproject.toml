@@ -36,8 +36,8 @@ dev = [
   "pytest-cov==7.1.0",
   "pytest-django==4.12.0",
   "pytest-xdist==3.8.0",
-  "ruff==0.15.18",
-  "ty==0.0.52",
+  "ruff==0.15.20",
+  "ty==0.0.55",
 ]
 
 [build-system]
