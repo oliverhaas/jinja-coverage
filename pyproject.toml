@@ -22,7 +22,7 @@ classifiers = [
 dependencies = ["coverage>=7.15.0", "jinja2>=3.1"]
 
 [project.optional-dependencies]
-django = ["django>=6.0"]
+django = ["django>=6.0.7"]
 
 [project.urls]
 Homepage = "https://github.com/oliverhaas/jinja-coverage"
@@ -30,14 +30,14 @@ Repository = "https://github.com/oliverhaas/jinja-coverage.git"
 
 [dependency-groups]
 dev = [
-  "django>=6.0",
+  "django>=6.0.7",
   "pre-commit==4.6.0",
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
   "pytest-django==4.12.0",
   "pytest-xdist==3.8.0",
-  "ruff==0.15.20",
-  "ty==0.0.56",
+  "ruff==0.15.21",
+  "ty==0.0.59",
 ]
 
 [build-system]
