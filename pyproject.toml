@@ -31,13 +31,13 @@ Repository = "https://github.com/oliverhaas/jinja-coverage.git"
 [dependency-groups]
 dev = [
   "django>=6.1",
-  "pre-commit==4.6.1",
+  "pre-commit==4.6.2",
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
-  "pytest-django==4.13.0",
+  "pytest-django==4.14.0",
   "pytest-xdist==3.8.0",
-  "ruff==0.16.2",
-  "ty==0.0.69",
+  "ruff==0.16.3",
+  "ty==0.0.72",
 ]
 
 [build-system]
