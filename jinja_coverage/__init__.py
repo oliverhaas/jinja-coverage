@@ -74,5 +74,4 @@ def _patch_save() -> None:
         original_save(self)
 
     setattr(save, _SAVE_PATCHED_FLAG, True)
-    # Monkeypatching coverage's save hook; the type checker can't model it.
-    coverage.Coverage.save = save  # ty: ignore[invalid-assignment]
+    coverage.Coverage.save = save

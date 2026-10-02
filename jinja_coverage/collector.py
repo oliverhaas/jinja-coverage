@@ -80,12 +80,12 @@ def flush_into(data: CoverageData, *, plugin_name: str, branch: bool = False) ->
     executed lines from the arc endpoints); otherwise we write lines.
     """
     if branch:
-        measured = {path: sorted(arcs) for path, arcs in _collected_arcs.items() if arcs}
-        add = data.add_arcs
+        arcs = {path: sorted(pairs) for path, pairs in _collected_arcs.items() if pairs}
+        if arcs:
+            data.add_file_tracers(dict.fromkeys(arcs, plugin_name))
+            data.add_arcs(arcs)
     else:
-        measured = {path: sorted(linenos) for path, linenos in _collected.items() if linenos}
-        add = data.add_lines
-    if not measured:
-        return
-    data.add_file_tracers(dict.fromkeys(measured, plugin_name))
-    add(measured)
+        lines = {path: sorted(linenos) for path, linenos in _collected.items() if linenos}
+        if lines:
+            data.add_file_tracers(dict.fromkeys(lines, plugin_name))
+            data.add_lines(lines)

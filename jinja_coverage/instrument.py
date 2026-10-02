@@ -495,7 +495,7 @@ def install() -> None:
     Environment.code_generator_class = InstrumentedCodeGenerator
     # Monkeypatching jinja's compile hook; the type checker can't model it.
     Environment._compile = _compile_with_sentinel  # ty: ignore[invalid-assignment]  # noqa: SLF001
-    BytecodeCache.get_cache_key = _instrumented_get_cache_key  # ty: ignore[invalid-assignment]
+    BytecodeCache.get_cache_key = _instrumented_get_cache_key
     setattr(Environment, _RECORD_FUNC, _record)
     setattr(Environment, _ARC_FUNC, _record_arc)
     setattr(Environment, _INSTALLED_FLAG, True)
